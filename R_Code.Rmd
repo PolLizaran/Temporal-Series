@@ -1830,3 +1830,4 @@ Veiem que el model usat per fer les prediccions sobre la sèrie linealitzada té
 Per aconseguir millorar les validacions dels residus hem hagut d'afitar un model molt més complex. Fent això, hem pogut obtenir prediccions d'una sèrie complicada per la seva estructura i gran quantitat d'atípics. 
 
 Observem que l'interval de la regió de confiança ha augmentat una mica però que tot i així la predicció feta per l'any $2019$ s'ajusta bastant a les observacions dels anys anteriors. Les prediccions fetes són més fiables perquè no consideren successos extranys que van fer modificar el comportament de la sèrie. En definitiva, hem aconseguit plantejar un model amb millors propietats dels residus i una sèrie linealitzada no contaminada pels atípics amb unes prediccions prou raonables en relació a les dades.
+
