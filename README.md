@@ -13,6 +13,7 @@ At that point, and just before analysing some statistics as AIC or BIC, we remov
 By last, we linealised (removed the outliers) the series with the model chosen regarding the above metrics. Thus, we had to apply Box-Jenkins again for the linealized temporary series and repeat the same steps, fit some models, and for the one chosen, predict the following year for which we didn't have information. 
   
 </p>
+
 - - -
 
 ## Authors
