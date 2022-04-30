@@ -1,0 +1,1832 @@
+---
+title: "Projecte sèries temporals (turismes)"
+author: "Pol Lizaran & Rodrigo Bonferroni"
+date: "29/4/2022"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+  word_document:
+    toc: yes
+    toc_depth: '5'
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+**L'objectiu d'aquesta pràctica és obtenir previsions a partir de la darrera observació enregistrada, aplicant la metodologia Box-Jenkins mitjançant els models ARIMA. A més, s'inclouran les extrensions per al tractament d'atípics.**
+
+```{r, echo = FALSE}
+# Carreguem algunes llibreries que usarem
+library(tinytex)
+```
+
+
+## **a) Identificació**
+
+```{r, echo = FALSE}
+serie <- ts(read.table("Turismos.dat")/1000, start = 1994, freq = 12)
+plot(serie, main = "Milers de turismes fabricats en Espanya", ylim = c(0,300), 
+     ylab = "# Turismes", xlab = "Anys")
+abline(v = 1990:2019, col = 4, lty = 3)
+```
+
+Aquesta sèrie conté dades sobre la quantitat de cotxes que es fabriquen a Espanya mensualment. Observem com la producció sembla ser que ha mantingut un comportament molt semblant al llarg dels anys. 
+
+Atès que tenim un conjunt de dades vinculades a diferents estacions de l'any, hi ha altibaixos en quant a la fabricació. Durant el mes d'Agost, causat per les vacances, s'observa una davallada molt forta en la producció. Aquest fet també passa durant el Desembre, encara que no amb tanta intensitat.
+
+A simple vista, sembla ser que hi ha certa variabilitat de les dades però no queda del tot clar si cal cap tractament per corregir la variància de la sèrie. De la mateixa manera, no s'observen tendències clares llevat d'una petita recessió durant els anys $2008 - 2014$ deguda a la crisi. Ja per últim sí que s'haurà de fer un tractament per eliminar els patrons estacionals.
+
+Seguidament aplicarem la metodología Box-Jenkins per convertir la sèrie en estacionària i així després poder fer prediccions amb aquesta.
+
+### Transformacions
+
+#### Estudi de la variància
+
+```{r, echo = FALSE}
+boxplot(serie~floor(time(serie)), xlab = "Anys")
+title("Boxplot de la sèrie")
+```
+
+No queda clar si els rangs interquartílics de les capses tenen diferents amplades per mitjanes anuals de producció properes. A més, apareixen observacions que s'allunyen de la mitjana, en alguns casos només en el mes d'Agost i en altres també durant el Desembre. 
+
+Aquest fet ens fa sospitar que potser haurem d'aplicar una transformació Box-Cox amb $\lambda = 0$.
+
+Verificarem si tenim variància constant mitjançant el gràfic de variància contra la mitjana.
+
+```{r, echo = FALSE}
+mean <- apply(matrix(serie, nrow = 12), 2, mean)
+var <- apply(matrix(serie, nrow = 12), 2, var)
+```
+
+```{r, echo = FALSE}
+plot(var ~ mean, ylim = c(0, 5000), xlab = "Mitjana", ylab = "Variància") 
+title("Variància segons la mitjana")
+```
+
+Podem veure un augment lleuger de la variància a mesura que les mitjanes de fabricació són més altes. Encara que aquest augment sigui sútil decidim aplicar una transformació Box-Cox. 
+
+```{r, echo = FALSE}
+# Box-Cox
+lnserie <- log(serie)
+```
+
+Verifiquem els efectes de la transformació.
+
+```{r, echo = FALSE}
+boxplot(lnserie~floor(time(lnserie)), xlab = "Anys")
+title("Boxplot del logaritme de la sèrie")
+```
+
+```{r, echo = FALSE}
+lnmean <- apply(matrix(lnserie, nrow = 12), 2, mean)
+lnvar <- apply(matrix(lnserie, nrow = 12), 2, var)
+```
+
+```{r, echo = FALSE}
+plot(lnvar ~ lnmean, ylim = c(0, 0.5), xlab = "log(Mitjana)", ylab = "log(Variància)") 
+title("Variància segons la mitjana de la sèrie transformada")
+```
+
+Els valors atípics de la sèrie, tal com era d'esperar, s'han mantingut. No obstant, hem aconseguit tenir una variància més constant que abans per totes les mitjanes anuals de les quals disposem. Ara ja no s'observa el lleuger increment de variància per mitjanes altes.
+
+Donada aquesta sèrie considerem que no és estrictament aplicar la transformació, encara que a l'aplicar-la sí que veiem una certa millora.
+ 
+El següent pas de la metodologia de Box-Jenkins és l'estudi de l'estacionalitat de la sèrie:
+
+#### Estudi de l'estacionalitat
+
+```{r, echo = FALSE}
+monthplot(lnserie, xlab = "Mesos de l'any")
+title("Monthplot")
+```
+
+Clarament veiem que la mitjana mensual de fabricació de turismes no és la mateixa, ja que els indicadors de la mitjana no formen una línia horitzontal. La sèrie té una component estacional amb davallades en els mesos amb més dies festius (Agost i Desembre). També s'observa com la mitjana de fabricació de cotxes disminueix en mesos com el Gener i l'Abril per l'efecte de la Setmana Santa. El motiu pel qual la mitjana mensual del Febrer és lleugerament inferior a la de Març és per la durada del mes.
+
+Aquesta estacionalitat també es pot observar en el següent gràfic perquè les diferents representacions anuals de la sèrie es comporten de la mateixa manera.
+
+```{r, echo = FALSE}
+ts.plot(matrix(lnserie,nrow = 12), xlab = "Mesos", 
+        ylab = "Mitjana logarítmica de fabricació")
+title("ts.plot")
+```
+
+Per corregir el patró estacional aplicarem una diferenciació estacional de freqüència $12$ al tractar-se de dades mensuals.
+
+```{r, echo = FALSE}
+d12lnserie <- diff(lnserie,12)
+
+# Grafiquem la sèrie transformada
+plot(d12lnserie, xlab = "Anys")
+title("Sèrie diferenciada")
+abline(h = mean(d12lnserie), col = 2, lwd = 2)
+abline(h = 0, col = 4, lwd = 2, lty = 2)
+```
+
+Grafiquem els canvis fets.
+
+```{r, echo = FALSE}
+monthplot(d12lnserie, xlab = "Mesos de l'any")
+title("Monthplot de la sèrie diferenciada")
+```
+
+```{r, echo = FALSE}
+ts.plot(matrix(d12lnserie,nrow = 12), xlab = "Mesos", 
+        ylab = "Mitjana de fabricació del logaritme \n de la sèrie diferenciada")
+title("ts.plot")
+```
+
+Es veu com efectivament s'ha corregit l'estacionalitat atès que els indicadors de les mitjanes mensuals es troben alineats. A més, veiem com la mitjana és molt propera a ser nul·la, fet que ens servirà més endavant per eliminar el coeficient _intercept_ dels models proposats. A continuació, procedirem a fer el darrer estudi per aconseguir una sèrie estacionària.
+
+#### Estudi de la mitjana
+
+Per confirmar si la sèrie necessita diferenciacions regulars per aconseguir mitjana constant, ens fixarem en un possible augment en la variància al diferenciar. Si aquesta augmenta, no aplicarem la transformació. Del contrari, repetirem el procés fins a trobar l'instant en què la variància augmenti després de fer una diferenciació regular.
+
+```{r, echo = FALSE}
+sprintf("La variància sense aplicar cap diferenciació regular és: %f", var(d12lnserie))
+sprintf("La variància aplicant una diferenciació regular és: %f", var(diff(d12lnserie)))
+```
+
+No cal cap diferenciació regular perquè aquesta suposaria un increment en la variància. Això significa que la sèrie ja tenia mitjana constant. 
+
+Hem aconseguit transformar la sèrie original a estacionària ($W_t = (1-B^{12})\cdot \log(X_t)$), obtenint com a resultat:
+
+```{r, echo = FALSE}
+plot(d12lnserie, main = "Sèrie estacionària", xlab = "Anys")
+abline(v = 1990:2019, col = 4, lty = 3)
+```
+
+### ACF i PACF
+
+- **Analitza l'ACF i PACF de la sèrie per identificar com a mínim dos models possibles. Raona en quines característiques et bases per identificar aquests models.**
+
+Estudiarem l'ACF i PACF de la sèrie estacionària per escollir alguns models.
+
+```{r, echo = FALSE}
+# Lag.max ens permet veure la correlació entre mostres d'un període de 5 anys
+acf(d12lnserie, ylim = c(-1,1), lwd = 2, lag.max = 72, col = c(2,rep(1,11)), main = "") 
+title("Sèrie estacionària")
+```
+
+```{r, echo = FALSE}
+pacf(d12lnserie, ylim = c(-1,1), lwd = 2, lag.max = 72, col = c(rep(1,11),2), main = "")
+title("Sèrie estacionària")
+```
+
+Veient els gràfics on es presenten els valors d'ACF i PACF podem considerar que el decreixement observat no és suficientment ràpid i, per tant, tindríem un infinit nombre de valors no nuls en la part regular. Per això proposem un model $ARMA(1,1)$. 
+
+En quant a la part estacional, observem com els valors sí que decreixen suficientment ràpid per poder considerar models diferents. En aquest cas, si observem la gràfica de PACF podem atribuir un model estacional de $AR(2)$. També podem considerar un model $MA(1)$ si mirem la funció d'ACF.
+
+Alternativament al model $ARMA(1,1)$ proposat per la part regular, podríem considerar que el PACF decreix d'una forma més significant que el ACF, fet que ens permet plantejar també un $AR(7)$.
+
+Considerant el fet que es tracta de models $ARIMA$ estacionals, els quatre models que es proposen per a la sèrie estacionària $W_t$ són:
+
+1) $\bf{SARIMA(1,0,1)(2,0,0)_{12}}$
+2) $\bf{SARIMA(1,0,1)(0,0,1)_{12}}$
+3) $\bf{SARIMA(7,0,0)(2,0,0)_{12}}$
+4) $\bf{SARIMA(7,0,0)(0,0,1)_{12}}$
+
+## **b) Estimació**
+
+- **Utilitza R per estimar quatre dels models identificats.**
+
+```{r, echo = FALSE}
+cat("_______ MODEL 1 _______", '\n')
+(model1 <- arima(x = d12lnserie, order = c(1,0,1), seasonal = list(order = c(2,0,0), 
+                                                                   period = 12)))
+```
+
+```{r, echo = FALSE}
+cat("_______ MODEL 2 _______", '\n')
+(model2 <- arima(x = d12lnserie, order = c(1,0,1), seasonal = list(order = c(0,0,1), 
+                                                                   period = 12)))
+```
+
+```{r, echo = FALSE}
+cat("_______ MODEL 3 _______", '\n')
+(model3 <- arima(x = d12lnserie, order = c(7,0,0), seasonal = list(order = c(2,0,0), 
+                                                                   period = 12)))
+```
+
+```{r, echo = FALSE}
+cat("_______ MODEL 4 _______", '\n')
+(model4 <- arima(x = d12lnserie, order = c(7,0,0), seasonal = list(order = c(0,0,1), 
+                                                                   period = 12)))
+```
+
+Per tal d'eliminar els coeficients no rellevants en els models, estudiarem la seva significància. Ens basarem en el $t-$ràtio, que pren com a test d'hipòtesi:
+
+$$
+\begin{cases} 
+H_0: \zeta_i = 0 \\
+H_1: \zeta_i \ne 0
+\end{cases} 
+$$
+
+sent $\zeta_i$ un coeficient del model. L'estadístic d'aquest test és: $\left(\mid \hat t\mid =  \left \vert \dfrac{\zeta}{se(\zeta)} \right\vert \right)$. Un coeficient serà significatiu si i només si $\mid \hat t \mid > 2$. 
+
+Procedim doncs a eliminar coeficients en cas que hi hagi. 
+
+```{r, echo = FALSE}
+cat("- Significància dels coeficients del model 1: ", 
+    abs(model1$coef/sqrt(diag(model1$var.coef))) > 2)
+```
+
+Atès que el coeficient _intercept_ no és significatiu, l'eliminem del model i tornarem a estimar el model per a la sèrie original indicant el nombre de diferenciacions de la part regular i estacionària en el mateix mètode d'estimació, sobre la sèrie original. 
+
+```{r, echo = FALSE}
+(model1_1 <- arima(x = lnserie, order = c(1,0,1), seasonal = list(order = c(2,1,0), 
+                                                               period = 12)))
+```
+
+Tornem a estudiar la significància dels coeficients i veiem que ara sí que tots expliquen part de la variabilitat de la sèrie. A més, com el valor d'AIC és inferior sí que eliminem el coeficient.
+
+```{r, echo = FALSE}
+cat("- Significància dels coeficients: ", 
+    abs(model1_1$coef/sqrt(diag(model1_1$var.coef))) > 2)
+```
+
+Concluïm que el model resultant és: 
+
+**Model 1:** $\boxed{\big(1 - 0.9139B\big)\big(1 + 0.6356B^{12} + 0.2712B^{24}\big)\big(1-B^{12}\big)log\big(X_t\big) = \big(1 - 0.6048B\big)Z_t}$
+
+Ara repetirem aquest procès per la resta de models.
+
+```{r, echo = FALSE}
+cat("- Significància dels coeficients del model 2: ", 
+    abs(model2$coef/sqrt(diag(model2$var.coef))) > 2)
+```
+
+De la mateixa manera que el model anterior, el coeficient _intercept_ torna a no ser significatiu. Si recordem els resultats obtinguts del primer exercici, aquest fet no ens hauria de sorprendre ja que hem vist que la mitjana de la sèrie estacionària era quasi nul·la. 
+
+Eliminem doncs aquest coeficient.
+
+```{r, echo = FALSE}
+(model2_1 <- arima(x = lnserie, order = c(1,0,1), seasonal = list(order = c(0,1,1), 
+                                                               period = 12)))
+
+```
+
+```{r, echo = FALSE}
+cat("- Significància dels coeficients: ", 
+    abs(model2_1$coef/sqrt(diag(model2_1$var.coef))) > 2)
+```
+
+Com l'AIC torna a millorar i tots els coeficients són significatius, el model resultant seria:
+
+**Model 2:** $\boxed{\big(1 - 0.9296B\big)\big(1 - B^{12}\big)log\big(X_t\big) = \big(1 -0.6071B -0.7206B^2\big)Z_t}$
+
+Fem l'estudi pel tercer model.
+
+```{r, echo = FALSE}
+cat("- Significància dels coeficients del model 3: \n", 
+    abs(model3$coef/sqrt(diag(model3$var.coef))) > 2)
+```
+
+De la mateixa manera que els dos primers models, el coeficient _intercept_ torna a ser no significatiu, aquest serà el primer coeficient que traurem del model.
+
+```{r, echo = FALSE}
+(model3_1 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12)))
+
+coef3_1 <- model3_1$coef[model3_1$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_1/sqrt(diag(model3_1$var.coef))) > 2)
+```
+
+Ens adonem que hi ha coeficients no significatius. Començarem traient el que té el valor de $\mid \hat t \mid$ més petit i tornarem a ajustar per verificar la significància sense aquell coeficient. En aquest cas eliminem primer el coeficient $ar5$.
+
+```{r, echo = FALSE}
+(model3_2 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(NA,NA,NA,NA,0,NA,NA,NA,NA)))
+
+coef3_2 <- model3_2$coef[model3_2$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_2/sqrt(diag(model3_2$var.coef))) > 2)
+```
+
+Ens adonem que l'AIC s'ha reduït i que seguim tenint paràmetres no significatius en el model, així que menyspreem el coeficient $ar4$, el de $t$-ràtio més petita.
+
+```{r, echo = FALSE}
+(model3_3 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,NA,NA,NA,NA)))
+
+coef3_3 <- model3_3$coef[model3_3$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_3/sqrt(diag(model3_3$var.coef))) > 2)
+```
+
+Tornem a verificar que l'AIC es redueix, fet que significa que el model ajusta millor sense el coeficient eliminat, i procedim a treure el darrer coeficient no significatiu que queda ($ar6$).
+
+```{r, echo = FALSE}
+(model3_4 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,0,NA,NA,NA)))
+
+coef3_4 <- model3_4$coef[model3_4$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_4/sqrt(diag(model3_4$var.coef))) > 2)
+```
+
+El que podem observar és que el nostre valor d'AIC ha empitjorat i, per tant, no hem d'eliminar aquest coeficient. Així doncs, el nostre model resultant seria:
+
+**Model 3:** 
+
+$\boxed{\big(1 - 0.2116B - 0.2868B^2  -0.2802B^3 - 0.0984B^6  +0.1121B^7\big)\big(1 +0.6641B^{12} + 0.2916B^{24}\big)\big(1-B^{12}\big)log\big(X_t\big) = Z_t}$
+
+Ara fem el mateix procès pel nostre últim model.
+
+```{r, echo = FALSE}
+cat("- Significància dels coeficients del model 4: ", 
+    abs(model4$coef/sqrt(diag(model4$var.coef))) > 2)
+```
+
+El coeficient _intercept_ no és significatiu en aquest model, per tant l'eliminem. 
+
+```{r, echo = FALSE}
+(model4_1 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12)))
+
+coef4_1 <- model4_1$coef[model4_1$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_1/sqrt(diag(model4_1$var.coef))) > 2)
+```
+
+Com al model anterior, tenim 4 coeficients que inicialment no són significatius. Ara eliminarem aquests coeficients començant des del més petit en $t$-ràtio: coeficient $ar5$. Destaquem que l'AIC del model ha millorat a l'eliminar la mitjana.
+
+
+```{r, echo = FALSE}
+(model4_2 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12), fixed = c(NA,NA,NA,NA,0,NA,NA,NA)))
+
+coef4_2 <- model4_2$coef[model4_2$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_2/sqrt(diag(model4_2$var.coef))) > 2)
+```
+
+Com l'AIC millora i ara el coeficient no significant més petit és el $ar4$, el traiem.
+
+```{r, echo = FALSE}
+(model4_3 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,NA,NA,NA)))
+
+coef4_3 <- model4_3$coef[model4_3$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_3/sqrt(diag(model4_3$var.coef))) > 2)
+```
+
+Seguim aplicant la mateixa estratègia i en aquest cas hem d'eliminar el coeficient $ar7$.
+
+```{r, echo = FALSE}
+(model4_4 <- arima(x = lnserie, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,NA,0,NA)))
+
+coef4_4 <- model4_4$coef[model4_4$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_4/sqrt(diag(model4_4$var.coef))) > 2)
+```
+
+Veiem amb aquest canvi el nostre AIC ha empitjorat i, per tant, no ens convé eliminar aquest coeficient ni cap altre. 
+
+El nostre model final resulta com: 
+
+**Model 4:** $\boxed{\big(1 - 0.2422 - 0.2978 - 0.2380 - 0.1073  +0.0876\big)\big(1-B^{12}\big)log\big(X_t\big) = (1 - 0.7061B)Z_t}$
+
+Un cop hem afitat tots els models, el següent pas a fer és verificar com de bons són.
+
+## **c) Validació**
+
+### Anàlisi complet dels residus
+- **Realitza l'anàlisi de residus complet justificant les premises a partir dels resultats gràfics corresponents.**
+
+Quan ajustem un model a una sèrie, s'han de complir certs criteris en els residus per tal de poder considerar que el model és bo. En cas que hi hagi una part d'informació sobre la sèrie que es pugui extreure a partir dels residus, significarà que no estem ajustant del tot bé i que ens estem deixant d'explicar una part. 
+
+Aquest estudi es basarà en les tres premises sobre els residus que s'han de complir: variància constant, que segueixin una distribució normal i independència entre els residus.
+
+```{r, echo = FALSE}
+# Models resultants un cop eliminats els coeficients no significatius
+model1_f <- model1_1
+model2_f <- model2_1
+model3_f <- model3_3
+model4_f <- model4_3
+```
+
+
+#### Estudi de la variància
+
+Per estudiar la variància dels residus, ho farem mitjançant el gràfic dels residus i l'ajust suau dels residus. Un cop fet l'estudi, ens vam adonar que quasi tots els models presentaven les mateixes característiques en quant a variància dels residus. Per aquest motiu vam decidir agrupar tots els gràfics i després de tot les conclusions generals dels models.
+
+```{r, echo = FALSE}
+# Model 1
+resi1 <- resid(model1_f)
+plot(resi1, bg = 4, col = "indianred1", xlab = "Anys")
+abline(h = 0)
+abline(h = c(-3*sd(resi1), 3*sd(resi1)), lty = 3, lwd = 2, col = 2)
+abline(h = c(max(resi1), min(resi1)) , lty = 3, col = 4)
+title("Gràfic dels residus - Model 1")
+
+cat("La diferència entre el valor màxim dels residus i l'interval de confiança és: ", 
+    abs(max(resi1)-3*sd(resi1)))
+
+cat("La diferència entre el valor mínim dels residus i l'interval de confiança és: ", 
+    abs(-3*sd(resi1) - min(resi1)))
+```
+
+```{r, echo = FALSE}
+scatter.smooth(sqrt(abs(resi1)), lpars = list(col = "indianred1"), xlab = "Anys", 
+               main = "Arrel dels valors absoluts dels residus - Model 1")
+grid()
+```
+
+```{r, echo = FALSE}
+# Model 2
+resi2 <- resid(model2_f)
+plot(resi2, bg = 4, col = "burlywood3", xlab = "Anys")
+abline(h = 0)
+abline(h = c(-3*sd(resi2), 3*sd(resi2)), lty = 3, lwd = 2, col = 2)
+abline(h = c(max(resi2), min(resi2)) , lty = 3, col = 4)
+title("Gràfic dels residus - Model 2")
+
+cat("La diferència entre el valor màxim dels residus i l'interval de confiança és: ", 
+    abs(max(resi2) - 3*sd(resi2)))
+
+cat("La diferència entre el valor mínim dels residus i l'interval de confiança és: ", 
+    abs(-3*sd(resi2) - min(resi2)))
+```
+
+```{r, echo = FALSE}
+scatter.smooth(sqrt(abs(resi2)), lpars = list(col = "burlywood3"), xlab = "Anys",
+               main = "Arrel dels valors absoluts dels residus - Model 2")
+grid()
+```
+
+```{r, echo = FALSE}
+# Model 3
+resi3 <- resid(model3_f)
+plot(resi3, bg = 4, col = "palegreen3", xlab = "Anys")
+abline(h = 0)
+abline(h = c(-3*sd(resi3), 3*sd(resi3)), lty = 3, lwd = 2, col = 2)
+abline(h = c(max(resi3), min(resi3)) , lty = 3, col = 4)
+title("Gràfic dels residus - Model 3")
+
+cat("La diferència entre el valor màxim dels residus i l'interval de confiança és: ", 
+    abs(max(resi3) - 3*sd(resi3)))
+
+cat("La diferència entre el valor mínim dels residus i l'interval de confiança és: ", 
+    abs(-3*sd(resi3) - min(resi3)))
+```
+
+```{r, echo = FALSE}
+scatter.smooth(sqrt(abs(resi3)), lpars = list(col = "palegreen3"), xlab = "Anys",
+               main = "Arrel dels valors absoluts dels residus - Model 3")
+grid()
+```
+
+```{r, echo = FALSE}
+# Model 4
+resi4 <- resid(model4_f)
+plot(resi4, bg = 4, col = "goldenrod1", xlab = "Anys")
+abline(h = 0)
+abline(h = c(-3*sd(resi4), 3*sd(resi4)), lty = 3, lwd = 2, col = 2)
+abline(h = c(max(resi4), min(resi4)) , lty = 3, col = 4)
+title("Gràfic dels residus - Model 4")
+
+cat("La diferència entre el valor màxim dels residus i l'interval de confiança és: ", 
+    abs(max(resi4) - 3*sd(resi4)))
+
+cat("La diferència entre el valor mínim dels residus i l'interval de confiança és: ", 
+    abs(-3*sd(resi4) - min(resi4)))
+```
+
+```{r, echo = FALSE}
+scatter.smooth(sqrt(abs(resi4)), lpars = list(col = "goldenrod1"), xlab = "Anys",
+               main = "Arrel dels valors absoluts dels residus - Model 4")
+grid()
+```
+
+En cap dels gràfics de l'ajust suau dels residus s'observa una línia recta, com esperaríem si els residus tinguessin variància constant. Per tant podem descartar la homoscedasticitat. Creiem que tots els models sí que presenten un comportament propi de la homoscedascitat a partir de l'any 2005, a excepció del primer. Això podria ser a causa dels residus dels primers anys de la sèrie els quals semblen tenir una variància més gran que la resta de residus i això faria que l'ajust no fos constant al llarg del temps.
+
+D'altra banda, hem de saber que en els gràfics dels residus només hauríem de tenir un $0.3 \%$ de les mostres totals fora de les bandes de confiança, en aquest cas $\dfrac{0.3}{100} · 300 = 0.9$ observacions com a màxim.
+
+Observacions estimades que se surten de la regió de confiança: 
+
+$\triangleright$ Model 1 $\approx$ 4
+
+$\triangleright$ Model 2 $\approx$ 2 - 3 
+
+$\triangleright$ Model 3 $\approx$ 4 - 5
+
+$\triangleright$ Model 4 $\approx$ 3
+
+Així doncs, refermem les conclusions anteriors i podem negar l'homoscedascitat perquè en tots els casos observem un elevat nombre de residus que superen els llindars de confiança.
+
+
+Entre els models que tenen en la part regular un $ARMA(1,1)$, el model $2$ presenta un menor nombre d'observacions fora i un ajust suau més semblant a una recta. 
+
+Entre els models que tenen en la part regular un $AR(7)$, el model $4$ presenta un menor nombre d'observacions fora malgrat que l'ajust suau és molt semblant entre els models.
+
+En  conclusió, cap dels models proposats presenta variància constant dels residus tot i que els models que s'apropen més a tenir-ne són el $2$ i el $4$.
+
+#### Estudi de la normalitat
+
+Per fer l'estudi de la normalitat dels residus compararem el comportament d'aquests amb el de la distribució normal fent servir un primer gràfic de quantils i l'histograma dels residus.
+
+A continuació farem l'estudi dels gràfics de percentils que s'obtenen fent servir els residus de cada model.
+
+```{r, echo = FALSE}
+# Plot de Normalitat pel model1
+
+qqnorm(resi1, xlab = "Quantils teòrics", ylab = "Quantils mostrals")
+qqline(resi1, col = "indianred1", lwd = 2, lty = 2)
+grid()
+
+# Plot de Normalitat pel model2
+
+qqnorm(resi2, xlab = "Quantils teòrics", ylab = "Quantils mostrals")
+qqline(resi2, col = "burlywood3", lwd = 2, lty = 2)
+grid()
+
+# Plot de Normalitat pel model3
+
+qqnorm(resi3, xlab = "Quantils teòrics", ylab = "Quantils mostrals")
+qqline(resi3, col = "palegreen3", lwd = 2, lty = 2)
+grid()
+
+# Plot de Normalitat pel model4
+
+qqnorm(resi4, xlab = "Quantils teòrics", ylab = "Quantils mostrals")
+qqline(resi4, col = "goldenrod1", lwd = 2, lty = 2)
+grid()
+```
+
+El que esperaríem veure a un gràfic d'aquest estil quan es fa un estudi de residus que segueixen un distribució normal, és que els valors (representats com cercles negres) s'ajustin a la línia de colors discontínua, la qual respresenta una distribució normal.
+
+Com podem observar, el comportament dels residus de tots els models no és el desitjat. En els quatre casos podem veure com, sobretot a l'inici i al final, no s'adapten a la línia de la distribució normal.
+
+Tenint en compte només aquest gràfic no sembla a priori que tinguem un model amb residus considerablement millors que la resta. En els models $2$ i $4$, les seves cues superiors es troben lleugerament més distanciades de la Normal.
+
+És important saber que hem de parlar d'atípics en les cues en tots els models i no de cues pesants perquè no hi ha una gran quantitat d'observacions acumulades alla.
+
+A la següent part farem un estudi dels histogrames que obtenim dels quatre models finals.
+
+```{r, echo = FALSE}
+# Histograma dels residus del model 1
+
+hist(resi1, breaks = 30, freq = FALSE, col = "indianred1", lwd = 2, border = 1, ylim = c(0,5),
+     ylab = "Quantitat", xlab = "Valor del residu", main = "Histograma dels residuals del model 1")
+curve(dnorm(x, mean = mean(resi1), sd = sd(resi1)), col = 2, add = T)
+grid(nx = NA, ny = NULL)
+
+# Histograma dels residus del model 2
+
+hist(resi2, breaks = 30, freq = FALSE, col="burlywood3", lwd = 2, border = 1, ylim = c(0,5),
+     ylab = "Quantitat", xlab = "Valor del residu", main = "Histograma dels residuals del model 2")
+curve(dnorm(x, mean = mean(resi2), sd = sd(resi2)), col = 2, add = T)
+grid(nx = NA, ny = NULL)
+
+# Histograma dels residus del model 3
+
+hist(resi3, breaks = 30, freq = FALSE, col = "palegreen3", lwd = 2, border = 1, ylim = c(0,5),
+     ylab = "Quantitat", xlab = "Valor del residu", main = "Histograma dels residuals del model 3")
+curve(dnorm(x, mean = mean(resi3), sd = sd(resi3)), col = 2, add = T)
+grid(nx = NA, ny = NULL)
+
+# Histograma dels residus del model 4
+
+hist(resi4, breaks = 30, freq = FALSE, col = "goldenrod1", lwd = 2, border = 1, ylim = c(0,5),
+     ylab = "Quantitat", xlab = "Valor del residu", main = "Histograma dels residuals del model 4")
+curve(dnorm(x, mean = mean(resi4), sd = sd(resi4)), col = 2, add = T)
+grid(nx = NA, ny = NULL)
+```
+
+El que veiem en aquests gràfics també ens fa pensar que cap dels models té residus que segueixin una distribució normal. 
+Els histogrames dels quatre models són exemples clars de curtosi positiva on les barres properes a la mitjana tenen un valor més elevat del que ens esperaríem. Així doncs, acabem tenint una distribució amb major pes en l'esperança i amb atípics a les cues. 
+
+El model 2 és el que presenta una major curtosi d'entre els quatre. 
+
+Apliquem el test de Shapiro-Wilk per validar les conclusions anteriors.
+
+```{r, echo = FALSE}
+shapiro.test(resi1)
+shapiro.test(resi2)
+shapiro.test(resi3)
+shapiro.test(resi4)
+```
+
+El test de Shapiro-Wilk planteja com a hipòtesi nula el fet que un conjunt d'observacions provenen d'una distribució Normal. L'estadístic $W$ determina, mitjançant una magnitud tabulada que pren valors que oscil·len entre $0$ i $1$, les desviacions que hi ha entre els valors de la mostra respecte els esperats d'una distribució Normal. Quan $W$ sigui inferior al valor crític tabulat, es rebutjarà la hipòtesi nula. 
+
+En el nostre cas, com el $p$-valor és inferior que $0.05$ als quatre casos, rebutgem la hipòtesi nula i per tant podem dir que les dades són significantment diferents a una distribució Normal, és a dir, que els residus no provenen d'una distribució Normal. El model que més proper es troba al $p$-valor és el primer, fet que podíem intuir veient les gràfiques pertanyents a aquest model.
+
+Fins ara, hem vist que cap dels quatre models té variància constant o distribució normal dels residus.
+
+#### Estudi de la independència
+
+Per fer l'estudi de la independència dels residus estudiarem els ACF i PACF dels residus del model. En el cas que cap de les observacions surtin fora de les bandes de confiança, o quasi cap, podrem considerar que els residus són compatibles amb un soroll blanc, i que per tant, tenen independència.
+
+```{r, echo = FALSE}
+# Model 1
+s = 12
+acf(resi1, ylim = c(-1,1), lag.max = 60, col = c("red", rep(1, s - 1)), lwd = 2, main = "")
+title("ACF dels residus del model 1")
+pacf(resi1, ylim = c(-1,1), lag.max = 60, col = c(rep(1, s - 1), "red"), lwd = 2, main = "")
+title("PACF dels residus del model 1")
+```
+
+És molt evident que no hi ha indepèndencia dels residus ja que s'observa una gran correlació entre residus a l'haver un gran nombre de barres que sobrepassen el llindar de confiança de l'ACF.  
+
+```{r, echo = FALSE}
+# Model 2
+acf(resi2, ylim = c(-1,1), lag.max = 60, col = c("tan3", rep(1, s-1)), lwd = 2, main = "")
+title("ACF dels residus del model 2")
+pacf(resi2, ylim = c(-1,1), lag.max = 60, col = c(rep(1, s - 1), "tan3"), lwd = 2, main = "")
+title("PACF dels residus del model 2")
+```
+
+Aquest model tampoc compleix amb la hipòtesi d'independència perquè observem numeroses barres de correlació que es troben per sobre del llindar de confiança que proporciona aquesta prova. No obstant, el PACF té menys observacions fora que l'anterior.
+
+```{r, echo = FALSE}
+# Model 3
+acf(resi3, ylim = c(-1,1), lag.max = 60, col = c(3, rep(1, s-1)), lwd = 2, main = "")
+title("ACF dels residus del model 3")
+pacf(resi3, ylim = c(-1,1), lag.max = 60, col = c(rep(1, s - 1), 3), lwd = 2, main = "")
+title("PACF dels residus del model 3")
+```
+
+El model $3$ ja presenta una estructura més semblant a un soroll blanc durant les primeres mostres, però amb el pas del temps el nombre d'observacions que se surten augmenta en el gràfic d'ACF. En el gràfic del PACF quasi totes les observacions queden dins. 
+
+El gràfic d'ACF no permet acceptar la hipòtesi d'independència dels residus.
+
+```{r, echo = FALSE}
+# Model 4
+acf(resi4, ylim = c(-1,1), lag.max = 60, col = c(7, rep(1, s-1)), lwd = 2, main = "")
+title("ACF dels residus del model 4")
+pacf(resi4, ylim = c(-1,1), lag.max = 60, col = c(rep(1, s - 1), 7), lwd = 2, main = "")
+title("PACF dels residus del model 4")
+```
+
+Observem que els dos gràfics pràcticament no tenen observacions fora de la regió, i aquelles poques que surten poden ser causades per l'aleatorietat del residus. Amb aquests gràfics dubten una mica de la independència, acabarem de concloure amb l'ajuda de les proves de continuació.
+
+A continuació comprovarem els resultats realitzant un **test de Ljung-Box**.
+
+El test de Ljung-Box verifica si un conjunt d'observacions retardades són aleatòries i independents usant l'estadístic $Q$. Cadascun dels cercles representa el $p$-valor de l'estadístic $Q$ de Ljung-Box. Per tal de poder acceptar que els residus del nostre model són compatibles amb el soroll blanc i, per tant, independents entre ells, totes les boles han de caure per sobre de la línia blava que mostra una significació del $0.05 \%$.
+
+```{r, echo = FALSE}
+cat("_______ MODEL 1 _______", '\n')
+tsdiag(model1_f, gof.lag = 72)
+Box.test(resi1, lag = 72, type = "Ljung")
+
+cat("_______ MODEL 2 _______", '\n')
+tsdiag(model2_f, gof.lag = 72)
+Box.test(resi2, lag = 72, type = "Ljung")
+
+cat("_______ MODEL 3 _______", '\n')
+tsdiag(model3_f, gof.lag = 72)
+Box.test(resi3, lag = 72, type = "Ljung")
+
+cat("_______ MODEL 4 _______", '\n')
+tsdiag(model4_f, gof.lag = 72)
+Box.test(resi4, lag = 72, type = "Ljung")
+
+```
+
+
+Conclusions sobre la independència:
+
+$\triangleright$ Model 1 $\approx$ A excepció de les dues primers mostres, tots els $p$-valors cauen per sota la línia blava indicant que no es tracta de residus independents.
+
+$\triangleright$ Model 2 $\approx$ Un altre cop, amb el test de Ljung-Box som capaços d'afirmar que els residus no tenen independència entre ells per els p-valors (representats com a cercles).
+
+$\triangleright$ Model 3 $\approx$ Observem que les $48$ primeres observacions presenten independència però a partir d'allà estan correlades. No posem acceptar la hipòtesis tot i ser millor que els dos primers models.
+
+$\triangleright$ Model 4 $\approx$ Malgrat haver independència en les primeres $72$ mostres, veiem una tendència a la baixa en els $p$-valors,així que augmentarem el _gof.lag_ per comprovar si realment el model té independència.
+
+```{r, echo = FALSE}
+tsdiag(model4_f, gof.lag = 96)
+Box.test(resi4, lag = 96, type = "Ljung")
+```
+
+Veiem com només les $75$ primeres mostres tenen independència però a partir d'aquell moment ja no.
+
+Conclusions finals:
+
+Dels tres models hem vist que no hi ha cap que compleixi cap dels tres requisits pels residus (variància constant, normalitat dels residus i independència dels residus). 
+
+S'ha demostrat que el primer model és aquell en el qual els residus segueixen una distribució més semblant a una Normal, tot i no ser-ho. 
+
+Per últim, amb els darrers tests hem comprovat que el quart model és el més proper a tenir residus independents. Atès que hi ha una gran quantitat de residus que sí que es comporten de manera independent, es podria considerar independència en els residus. Nosaltres, però, no ho considerarem. 
+
+### AR i MA infinits
+
+
+- **Incloeu dades de les expressions dels models com AR i MA infinits, si són estacionaris i/o inveribles y les mesures d'adequació a les dades**.
+
+EXPRESSIONS:
+
+Per calcular les expressions dels models com $AR$ i $MA$ infinits fem servir la comanda _ARMAtoMA_ que retornarà:
+
+```{r, echo = FALSE}
+cat("_______ MODEL 1 _______", '\n')
+# AR infinit del model 1
+cat("AR infinit", '\n')
+(pis1 = -ARMAtoMA(ar=-model1_f$model$theta, ma=-model1_f$model$phi, lag.max=36))
+
+
+#MA infinit del model 1
+cat("MA infinit", '\n')
+(psis1 = ARMAtoMA(ar=model1_f$model$phi, ma=model1_f$model$theta, lag.max=36))
+```
+
+Atès que no podem treballar amb infinits coeficients, el que farem és trucar a partir del moment que els coeficients tinguin una significació $\alpha < 0.05$. Així aconseguirem, al preu de perdre informació, aconseguir emmagatzemar els $AR$ i $MA$ infinits.
+
+L'expressió $AR$ infinita del model 1 és: 
+
+$Xt = 0.3039X_{t-1} + 0.1869X_{t-2} + ... + 0.0843X_{t-25}+0.0509X_{t-26}$
+
+L'expressió $MA$ infinita del model 1 és:
+
+$Xt = 0.3091Z_{t-1} + 0.2825Z_{t-2}+...+0.0988Z_{t-24}$
+
+```{r, echo = FALSE}
+cat("_______ MODEL 2 _______", '\n')
+# AR infinit del model 2
+cat("AR infinit", '\n')
+(pis2 = -ARMAtoMA(ar=-model2_f$model$theta, ma=-model2_f$model$phi, lag.max=36))
+
+
+#MA infinit del model 2
+cat("MA infinit", '\n')
+(psis2 = ARMAtoMA(ar=model2_f$model$phi, ma=model2_f$model$theta, lag.max=36))
+```
+
+L'expressió $AR$ infinita del model 2 és:
+
+$Xt = 0.3224X_{t-1} + 0.1957X_{t-2}+ ...- 0.3734X_{t-36}$ 
+
+L'expressió $MA$ infinita del model 2 és:
+
+$Xt = 0.3224Z_{t-1} + 0.2997Z_{t-2} +...-0.0547Z_{t-21}-0.0508Z_{t-22}$ 
+
+```{r, echo = FALSE}
+cat("_______ MODEL 3 _______", '\n')
+# AR infinit del model 3
+cat("AR infinit", '\n')
+(pis3 = -ARMAtoMA(ar=-model3_f$model$theta, ma=-model3_f$model$phi, lag.max=36))
+
+
+#MA infinit del model 3
+cat("MA infinit", '\n')
+(psis3 = ARMAtoMA(ar=model3_f$model$phi, ma=model3_f$model$theta, lag.max=36))
+```
+
+L'expressió $AR$ infinita del model 3 és:   
+
+$Xt = 0.2115X_{t-1} + 0.2868X_{t-2} + ... + 0.0836X_{t-26} + 0.0817X_{t-27}$ 
+
+L'expressió $MA$ infinita del model 3 és:
+
+$Xt = 0.2115Z_{t-1} + 0.3316Z_{t-2} + ... + 0.1036Z_{t-36}$ 
+
+```{r, echo = FALSE}
+cat("_______ MODEL 4 _______", '\n')
+# AR infinit del model 4
+cat("AR infinit", '\n')
+(pis4 = -ARMAtoMA(ar=-model4_f$model$theta, ma=-model4_f$model$phi, lag.max=36))
+
+
+#MA infinit del model 4
+cat("MA infinit", '\n')
+(psis4 = ARMAtoMA(ar=model4_f$model$phi, ma=model4_f$model$theta, lag.max=36))
+```
+
+L'expressió AR infinita del model 3 és:   
+$Xt = 0.2421X_{t-1} + 0.2977X_{t-2} + ... - 0.352X_{t-36}$ 
+
+L'expressió MA infinita del model 3 és:
+$Xt = 0.2421Z_{t-1} + 0.3564Z_{t-2} + ... - 0.0523Z_{t-26}$
+
+### Invertibilitat i causalitat
+
+Recordem que per veure si el model estimat és causal hem de fixar-nos a la part $AR$, mentre que per estudiar si la sèrie és invertible, hem de mirar només la part de mitjana mòbil.
+
+En el cas que alguna de les arrels caigui dins del cercle unitari no es podria considerar causal (per un $AR$) o invertible (considerant $MA$). Anem a comprovar si en els nostres models les arrels són inferiors a $1$.
+
+```{r, echo = FALSE}
+cat("_______ MODEL 1 _______", '\n')
+# Estudi de la causalitat del primer model
+arrels_AR1 <- Mod(polyroot(c(1,-model1_f$model$phi)))
+cat("Arrels de l'AR", '\n')
+arrels_AR1
+table(arrels_AR1 <= 1)
+```
+
+```{r, echo = FALSE}
+# Estudi de la invertibilitat del primer model
+arrels_MA1 <- Mod(polyroot(c(1,model1_f$model$theta)))
+cat("Arrels del MA", '\n')
+arrels_MA1
+table(arrels_MA1 <= 1)
+```
+
+El model $1$ és causal i invertible perquè no tenim cap arrel dins del cercle unitari, ja sigui arrel $MA$ o $AR$.
+
+```{r, echo = FALSE}
+cat("_______ MODEL 2 _______", '\n')
+# Estudi de la causalitat del segon model
+arrels_AR2 <- Mod(polyroot(c(1,-model2_f$model$phi)))
+cat("Arrels de l'AR:", '\n')
+arrels_AR2
+cat("Arrels dins del cercle unitari:", '\n')
+table(arrels_AR2 <= 1)
+```
+
+```{r, echo = FALSE}
+# Estudi de la invertibilitat del segon model
+arrels_MA2 <- Mod(polyroot(c(1,model2_f$model$theta)))
+cat("Arrels del MA:", '\n')
+arrels_MA2
+cat("Arrels dins del cercle unitari:", '\n')
+table(arrels_MA2 <= 1)
+```
+
+El segon model també és invertible i causal, inclús podem dir que és millor model predictor ja que les arrels són més properes al cercle unitàri que les que del primer model. 
+
+```{r, echo = FALSE}
+cat("_______ MODEL 3 _______", '\n')
+# Estudi de la causalitat del tercer model
+arrels_AR3 <- Mod(polyroot(c(1,-model3_f$model$phi)))
+cat("Arrels de l'AR:", '\n')
+arrels_AR3
+cat("Arrels dins del cercle unitari:", '\n')
+table(arrels_AR3 <= 1)
+```
+
+En aquest cas el model és causal ja que no hi ha cap arrel AR menor o igual a $1$, i també és invertible. Això ho sabem perquè no tenim components en la mitjana mòbil.
+
+```{r, echo = FALSE}
+cat("_______ MODEL 4 _______", '\n')
+# Estudi de la causalitat del quart model
+arrels_AR4 <- Mod(polyroot(c(1,-model4_f$model$phi)))
+cat("Arrels de l'AR:", '\n')
+arrels_AR4
+cat("Arrels dins del cercle unitari:", '\n')
+table(arrels_AR4 <= 1)
+```
+
+```{r, echo = FALSE}
+# Estudi de la invertibilitat del quart model
+arrels_MA4 <- Mod(polyroot(c(1,model4_f$model$theta)))
+cat("Arrels del MA:", '\n')
+arrels_MA4
+cat("Arrels dins del cercle unitari:", '\n')
+table(arrels_MA4 <= 1)
+```
+
+L'últim model també és causal i invertible ja que no tenim cap arrel que sigui menor o igual a $1$. 
+
+### Mesures d'adeqüació de les dades
+
+Els criteris AIC i BIC són dos criteris de selecció de models. Ens serveixen per comparar models alternatius d'un mateix conjunt de dades. 
+
+Amb el criteri del BIC, es penalitza més el fet d'afegir coeficients, per tant és molt restrictiu amb models amb alt nombre de coeficients, com és el cas amb el model $3$ i $4$. 
+
+Ambdós criteris permeten fer-se una idea de com de bé s'ajusta un model i la complexitat d'aquest.  
+
+Les mesures d'adequació pel model 1 són:
+```{r, echo = FALSE}
+sprintf("AIC: %f", AIC(model1_f))
+sprintf("BIC: %f", BIC(model1_f))
+```
+
+Les mesures d'adequació pel model 2 són:
+```{r, echo = FALSE}
+sprintf("AIC: %f", AIC(model2_f))
+sprintf("BIC: %f", BIC(model2_f))
+```
+
+Les mesures d'adequació pel model 3 són:
+```{r, echo = FALSE}
+sprintf("AIC: %f", AIC(model3_f))
+sprintf("BIC: %f", BIC(model3_f))
+```
+
+Les mesures d'adequació pel model 4 són:
+```{r, echo = FALSE}
+sprintf("AIC: %f", AIC(model4_f))
+sprintf("BIC: %f", BIC(model4_f))
+```
+
+El que podem veure d'aquest estudi és que fixant-nos només en criteri AIC, el millor model és el quart. Té un AIC amb valor $-344.197$, considerablement superior al segon millor AIC ($-335.605$), el qual s'aconsegueix ambel segon model. 
+
+No obstant, hem de tenir en compte que el model $4$ és molt més complex en comparació al segon. Això ho veiem clar quan analitzem el criteri BIC ja que el segon model és el que té un BIC més baix perquè tot i ajustar pitjor té menys paràmetres en comparació.
+
+### Estabilitat dels models
+
+- **Verifica l'estabilitat del model i avalua la seva capacitat de predicció, reservant les últimes 12 observacions.** 
+
+Per tal de poder avaluar la capacitat de predicció, el que fem és separar les últimes darreres $12$ observacions ($1$ any) per veure es veu afectat el model proposat sense aquesta part de la sèrie. 
+
+```{r, echo = FALSE}
+darrer_periode = c(2017,12)
+serie_enfinestrada = window(serie, end = darrer_periode) 
+lnserie_enf = log(serie_enfinestrada)
+```
+
+Un cop hem extret les observacions del darrer any, procedim a fer ajustar els diferents models proposats sobre la sèrie i avaluar la seva capacitat predictora. Recordem que per tal de poder considerar que un model estable s'han de complir tres requisits:
+
+- Mateixa significància en els coeficients
+- Mateix signe en els coeficients
+- Poca diferència entre els valors dels coeficients
+
+Ajustem el primer model i estudiem la seva estabilitat:
+
+```{r, echo = FALSE}
+cat("_______ MODEL 1 _______", '\n')
+
+model1_f
+
+cat("_______ MODEL 1 ENFINESTRAT _______", '\n')
+
+(model1_enf <- arima(x = lnserie_enf, order = c(1,0,1), seasonal = list(order = c(2,1,0), 
+                                                               period = 12)))
+
+cat("-------------------------", '\n')
+cat("Els coeficients tenen la mateixa significància?", '\n')
+signif1_enf <- abs(model1_enf$coef/sqrt(diag(model1_enf$var.coef))) > 2
+signif1_f <- abs(model1_f$coef/sqrt(diag(model1_f$var.coef))) > 2
+signif1_enf == signif1_f
+
+cat("Els coeficients tenen el mateix signe?", '\n')
+signe1_enf <-model1_enf$coef > 0
+signe1_f <- model1_f$coef > 0
+signe1_enf == signe1_f
+
+cat("Diferència entre coeficients:", '\n')
+(model1_f$coef - model1_enf$coef)
+```
+
+Podem afirmar que el model 1 és estable perquè els coeficients no canvien de significància ni tampoc de signe, i podem veure com la diferència entre els coeficients és considerablement petita.
+
+Ajustem el segon model i estudiem la seva estabilitat:
+
+```{r, echo = FALSE}
+cat("_______ MODEL 2 _______", '\n')
+
+model2_f
+
+cat("_______ MODEL 2 ENFINESTRAT _______", '\n')
+
+(model2_enf <- arima(x = lnserie_enf, order = c(1,0,1), seasonal = list(order = c(0,1,1), 
+                                                               period = 12)))
+
+cat("-------------------------", '\n')
+cat("Els coeficients tenen la mateixa significància?", '\n')
+signif2_enf <- abs(model2_enf$coef/sqrt(diag(model2_enf$var.coef))) > 2
+signif2_f <- abs(model2_f$coef/sqrt(diag(model2_f$var.coef))) > 2
+signif2_enf == signif2_f
+
+cat("Els coeficients tenen el mateix signe?", '\n')
+signe2_enf <-model2_enf$coef > 0
+signe2_f <- model2_f$coef > 0
+signe2_enf == signe2_f
+
+cat("Diferència entre coeficients:", '\n')
+(model2_f$coef - model2_enf$coef)
+```
+
+El segon model també el podem considerar estable ja que compleix les 3 condicions que hem establert prèviament: mateixa significància de coeficients, mateix signe de coeficients i poca diferència entre aquests.
+
+Primer ajustem el tercer model per després estudiar la seva estabilitat:
+
+```{r, echo = FALSE}
+(model3_enf_1 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12)))
+
+
+
+coef3_enf_1 <- model3_enf_1$coef[model3_enf_1$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_enf_1/sqrt(diag(model3_enf_1$var.coef))) > 2)
+```
+
+Primer hem eliminat el coeficient _intercept_ del model enfinestrat i ara proseguirem amb l'eliminació de la resta de coeficients no significatius que trobem al model. Començant pel coeficient $ar5$ ja que té la significància més petita.
+
+```{r, echo = FALSE}
+(model3_enf_2 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(NA,NA,NA,NA,0,NA,NA,NA,NA)))
+
+
+
+coef3_enf_2 <- model3_enf_2$coef[model3_enf_2$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_enf_2/sqrt(diag(model3_enf_2$var.coef))) > 2)
+```
+
+Es pot apreciar que aquest nou model és millor que l'anterior ja que veiem com el valor del AIC ha millorat, sempre que vagi millorant aquest aspecte del model seguirem descartant coeficients que no siguin prou significatius. Ara el coeficient més petit és el $ar4$.
+
+```{r, echo = FALSE}
+(model3_enf_3 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,NA,NA,NA,NA)))
+
+
+coef3_enf_3 <- model3_enf_3$coef[model3_enf_3$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_enf_3/sqrt(diag(model3_enf_3$var.coef))) > 2)
+```
+
+L'AIC segueix millorant per tant confirmem que aquest model és millor que l'anterior. El nou coeficient que considerarem eliminar ara és el $ar6$. 
+
+```{r, echo = FALSE}
+(model3_enf_4 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,0,NA,NA,NA)))
+
+
+coef3_enf_4 <- model3_enf_4$coef[model3_enf_4$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef3_enf_4/sqrt(diag(model3_enf_4$var.coef))) > 2)
+```
+
+Observem com el nostre AIC ha empitjorat lleugerament en comparació al model anterior, això significa que ens interessa quedar-nos amb aquest coeficient encara que no sigui estrictament significatiu. 
+
+```{r, echo = FALSE}
+cat("_______ MODEL 3 _______", '\n')
+
+model3_f
+
+cat("_______ MODEL 3 ENFINESTRAT _______", '\n')
+
+(model3_enf_f <- model3_enf_3)
+
+
+coef3_enf_f <- model3_enf_f$coef[model3_enf_f$coef != 0]
+coef3_f <- coef3_3
+
+cat("-------------------------", '\n')
+cat("Els coeficients tenen la mateixa significància?", '\n')
+signif3_enf <- abs(coef3_enf_f/sqrt(diag(model3_enf_f$var.coef))) > 2
+signif3_f <- abs(coef3_f/sqrt(diag(model3_f$var.coef))) > 2
+signif3_enf == signif3_f
+
+
+cat("Els coeficients tenen el mateix signe?", '\n')
+signe3_enf <- coef3_enf_f > 0
+signe3_f <- coef3_f > 0
+signe3_enf == signe3_f
+
+cat("Diferència entre coeficients:", '\n')
+(coef3_f - coef3_enf_f)
+```
+
+Confirmem que els dos models tenen els coeficients amb la mateixa significància i el mateix signe. A més veiem com la diferència entre els coeficients és prou petita com per considerar-la negligible, tenint un màxim de $0.0247$ en el cas del coeficient $sar2$.
+
+Ara farem el mateix ajust i estudi pel quart model.
+
+```{r, echo = FALSE}
+(model4_enf_1 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12)))
+
+coef4_enf_1 <- model4_enf_1$coef[model4_enf_1$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_enf_1/sqrt(diag(model4_enf_1$var.coef))) > 2)
+```
+
+Podem veure com tenim un gran nombre de coeficients que no són significatius a aquest model, ara per ajustar-ho eliminarem aquests coeficients un a un començant des del que té la menor significància, en el cas que el nostre model millorés sabrem que aquest coeficient s'ha d'eliminar.
+
+El primer coeficient que hem eliminat ha estat el coeficient _intercept_ i ara el següent que eliminarem serà el coeficient $ar5$.
+
+```{r, echo = FALSE}
+(model4_enf_2 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12), fixed = c(NA,NA,NA,NA,0,NA,NA,NA)))
+
+coef4_enf_2 <- model4_enf_2$coef[model4_enf_2$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_enf_2/sqrt(diag(model4_enf_2$var.coef))) > 2)
+```
+
+Com el criteri AIC ha millorat en comparació a l'anterior model sabem que estem fent canvis correctes al model. 
+
+El següent coeficient que considerem eliminar per millorar el model és el $ar4$.
+
+```{r, echo = FALSE}
+(model4_enf_3 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,NA,NA,NA)))
+
+coef4_enf_3 <- model4_enf_3$coef[model4_enf_3$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_enf_3/sqrt(diag(model4_enf_3$var.coef))) > 2)
+```
+
+Un altre cop confirmem que era necessari treure aquest coeficient per la millora que obtenim en el AIC del model. 
+
+Ara el coeficient que ens interessa eliminar del model serà el coeficient $ar7$.
+
+```{r, echo = FALSE}
+(model4_enf_4 <- arima(x = lnserie_enf, order = c(7,0,0), seasonal = list(order = c(0,1,1), 
+                                                               period = 12), fixed = c(NA,NA,NA,0,0,NA,0,NA)))
+
+coef4_enf_4 <- model4_enf_4$coef[model4_enf_4$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef4_enf_4/sqrt(diag(model4_enf_4$var.coef))) > 2)
+```
+
+Ara veiem un empitjorament en el AIC d'aquest model, senyal que no podem descartar aquest últim coeficient. 
+
+Ens quedarem amb l'anterior model per fer l'estudi d'estabilitat.
+
+```{r, echo = FALSE}
+cat("_______ MODEL 4 _______", '\n')
+
+model4_f
+
+cat("_______ MODEL 4 ENFINESTRAT _______", '\n')
+
+(model4_enf_f <- model4_enf_3)
+
+
+coef4_enf_f <- model4_enf_f$coef[model4_enf_f$coef != 0]
+coef4_f <- coef4_3
+
+cat("-------------------------", '\n')
+cat("Els coeficients tenen la mateixa significància?", '\n')
+signif4_enf <- abs(coef4_enf_f/sqrt(diag(model4_enf_f$var.coef))) > 2
+signif4_f <- abs(coef4_f/sqrt(diag(model4_f$var.coef))) > 2
+signif4_enf == signif4_f
+
+
+cat("Els coeficients tenen el mateix signe?", '\n')
+signe4_enf <- coef4_enf_f > 0
+signe4_f <- coef4_f > 0
+signe4_enf == signe4_f
+
+cat("Diferència entre coeficients:", '\n')
+(coef4_f - coef4_enf_f)
+```
+
+Podem confirmar la estabilitat d'aquest model ja que no tenim cap coeficient amb una significància diferent en comparació al model ajustat fent servir la sèrie enfinestrada. A més, tots tenen el mateix signe i la diferència entre ells és prou petita. 
+
+CONCLUSIONS:
+
+Tots els models presenten estabilitat.
+
+#### Avaluació de la capacitat predicció
+
+Abans d'obtenir les prediccions pel darrer any, cal destacar que en tots els casos aplicarem la funció exponencial per desfer la transformació logarítmica inicial i així poder poder analitzar els resultats respecte la sèrie original.
+
+Amb el RMSPE i MAPE som capaços de comparar els models basant-nos en els errors que s'han fet al predir, ja que estem predint el darrer any i tenim dades d'aquest.
+
+Mentre que el RMSPE indica, en tant percent, l'arrel de l'error del valor observat, el MAPE mesura l'error promig en forma de percentatge. Són interessants perquè permeten fer una quantificació de l'error sense tenir en compte les unitats en les que treballa el model.
+
+$$
+RMSPE = \sqrt{\dfrac{1}{n}\sum_{i = 1}^{n}\left( \dfrac{\theta - \hat\theta}{ \theta}\right)^2}
+$$
+Fórmula del MAPE:
+
+$$
+MAPE = \dfrac{1}{n}\sum_{i = 1}^{n}\left\vert\dfrac{\theta - \hat\theta}{\theta}\right\vert
+$$
+
+- Prediccions pel primer model:
+
+```{r, echo = FALSE}
+mean_serie <- mean(serie)
+
+lnpr1 <- predict(model1_enf, n.ahead = 12)
+pr1 <- exp(lnpr1$pred) # Prediccions puntuals
+
+ll1 <- exp(lnpr1$pred - 1.96*lnpr1$se) # Límit inferior de les bandes de confiança amb un 95% 
+ul1 <- exp(lnpr1$pred + 1.96*lnpr1$se) # Límit superior
+
+ts.plot(serie, ll1, ul1, pr1, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2019), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 1")
+text(2018.8, 240, 'Pred1', col = 2)
+text(2017.7, 300, 'Lim. Sup', col = 4)
+text(2018.2, 125, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+```
+
+```{r, echo = FALSE}
+obs = window(serie, start = 2018) # Recuperem les 12 observacions reservades
+
+RMSPE1 = 100*sqrt(mean(((obs - pr1)/obs)^2))
+MAPE1 = 100*mean(abs(obs - pr1)/obs)
+
+sprintf("RMSPE pel model 1: %f %%", RMSPE1)
+sprintf("MAPE pel model 1: %f %%", MAPE1)
+
+# Mitjana de les amplades dels intervals de predicció
+
+sprintf("La mitjana de les amplades dels intervals de predicció pel model 1 és: %f", 
+        mean(ul1 - ll1))
+
+```
+
+El que podem veure és que les prediccions creades amb aquest model no són gaire precises ja que obtenim un RMSPE i MAPE superiors al $10 \%$. Podem observar com gran part de les nostres prediccions (representat en vermell al gràfic) s'allunyen considerablement dels valors observats reals. 
+
+Tenir un interval de predicció molt gran significa que hi ha més possibilitats que s'ajusti una predicció que no s'adapta al comportament de la sèrie. En aquest cas veiem com el nostre interval de predicció és considerablement gran, $122.629492$. Ens confirma que aquest model no és molt precís a l'hora de fer prediccions sobre la sèrie.
+
+```{r, echo = FALSE}
+lnpr2 <- predict(model2_enf, n.ahead = 12)
+pr2 <- exp(lnpr2$pred) # Prediccions puntuals
+
+ll2 <- exp(lnpr2$pred - 1.96*lnpr2$se) # Límit inferior de les bandes de confiança amb un 95% 
+ul2 <- exp(lnpr2$pred + 1.96*lnpr2$se) # Límit superior
+
+ts.plot(serie, ll2, ul2, pr2, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2019), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 2")
+text(2018.8, 230, 'Pred2', col = 2)
+text(2017.7, 300, 'Lim. Sup', col = 4)
+text(2018.2, 125, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+```
+
+```{r, echo = FALSE}
+RMSPE2 = 100*sqrt(mean(((obs - pr2)/obs)^2))
+MAPE2 = 100*mean(abs(obs - pr2)/obs)
+
+sprintf("RMSPE pel model 2: %f %%", RMSPE2)
+sprintf("MAPE pel model 2: %f %%", MAPE2)
+
+# Mitjana de les amplades dels intervals de predicció
+
+sprintf("La mitjana de les amplades dels intervals de predicció pel model 2 és: %f", 
+        mean(ul2 - ll2))
+```
+
+El segon model veiem que té una millor capacitat predictora. Es veu reflectit en la disminució del RMSPE i MAPE en comparació al primer model. Encara que veiem una millora aquest model també té valors bastant elevats, tant de RSMPE i MAPE com d'amplada de l'interval de predicció, i, en conseqüència no podem afirmar que sigui un bon model predictor. 
+
+```{r, echo = FALSE}
+lnpr3 <- predict(model3_enf_f, n.ahead = 12)
+pr3 <- exp(lnpr3$pred) # Prediccions puntuals
+
+ll3 <- exp(lnpr3$pred - 1.96*lnpr3$se) # Límit inferior de les bandes de confiança amb un 95% 
+ul3 <- exp(lnpr3$pred + 1.96*lnpr3$se) # Límit superior
+
+ts.plot(serie, ll3, ul3, pr3, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2019), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 3")
+text(2018.8, 243, 'Pred3', col = 2)
+text(2017.7, 300, 'Lim. Sup', col = 4)
+text(2018.2, 125, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+```
+
+```{r, echo = FALSE}
+RMSPE3 = 100*sqrt(mean(((obs - pr3)/obs)^2))
+MAPE3 = 100*mean(abs(obs - pr3)/obs)
+
+sprintf("RMSPE pel model 3: %f %%", RMSPE3)
+sprintf("MAPE pel model 3: %f %%", MAPE3)
+
+# Mitjana de les amplades dels intervals de predicció
+
+sprintf("La mitjana de les amplades dels intervals de predicció pel model 3 és: %f", 
+        mean(ul3 - ll3))
+
+```
+
+Amb el tercer model veiem un altre cop valors de RMSPE i MAPE similars al primer model, encara que es nota una millora lleugera.Tal com passa amb el primer model no podem dir que és un model adequat per fer prediccions. 
+
+```{r, echo = FALSE}
+lnpr4 <- predict(model4_enf_f, n.ahead = 12)
+pr4 <- exp(lnpr4$pred) # Prediccions puntuals
+
+ll4 <- exp(lnpr4$pred - 1.96*lnpr4$se) # Límit inferior de les bandes de confiança amb un 95% 
+ul4 <- exp(lnpr4$pred + 1.96*lnpr4$se) # Límit superior
+
+ts.plot(serie, ll4, ul4, pr4, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2019), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 4")
+text(2018.8, 225, 'Pred4', col = 2)
+text(2017.7, 300, 'Lim. Sup', col = 4)
+text(2018.2, 125, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+```
+
+```{r, echo = FALSE}
+RMSPE4 = 100*sqrt(mean(((obs - pr4)/obs)^2))
+MAPE4 = 100*mean(abs(obs - pr4)/obs)
+
+sprintf("RMSPE pel model 4: %f %%", RMSPE4)
+sprintf("MAPE pel model 4: %f %%", MAPE4)
+
+# Mitjana de les amplades dels intervals de predicció
+
+sprintf("La mitjana de les amplades dels intervals de predicció pel model 4 és: %f", 
+        mean(ul4 - ll4))
+```
+
+Aquest és el model que millor prediu les dades observades jutjant pels valors del RMSPE i el MAPE. A més, com és d'esperar, l'interval de predicció és el més petit dels quatre. 
+
+### Tria del model
+
+- **Selecciona el millor model per fer les previsions**
+
+Cap dels quatre models compleix els tres requisits pels residus (variància constant, normalitat dels residus i independència dels residus). El primer model és el que més proper es troba de complir la normalitat dels residus i el model quatre és, amb diferència, el model més proper a tenir independència dels residus. 
+
+Tots els models són causals, invertibles i estables, per tant, en aquesta faceta no hi ha cap model millor que els altres.
+
+Per saber quin serà el model que millors prediccions produirà ens podem fixar en els valors de les arrels $MA$/$AR$. Quan més propera,però no igual, sigui l'arrel al cercle unitàri, millors prediccions farà el model. Basant-nos en aquest fet, el millor model seria el segon (té arrels amb valors de fins $1.027$), seguit pel quart model (que arriba a tenir arrels amb valors $1.029$). 
+
+Prenent en consideració les característiques mencionades, escollirem el quart model per fer prediccions, ja que és el que té una millor validació dels residus. A més, el model $4$ és el que té un millor AIC i és el segon model amb millor BIC. Pel que fa a les mesures de predicció $MAPE$ i $RMSPE$ també és el model amb inferior percentatge d'error observat i el segon amb menor amplada d'intervals de confiança.
+
+Així doncs, predirem usant el model: $\bf{SARIMA(7,0,0)(0,0,1)_{12}}$
+
+## d) **Previsions**
+
+- **Obteniu les previsions a llarg termini per els $12$ mesos posteriors a la última observació, amb l'interval de confiança corresponent**
+
+Som conscients que les prediccions que obtindrem no s'ajustaran de manera molt precisa ja que els paràmetres $MAPE$ i $RMSPE$ són massa elevats. Això no obstant, seran les millors possibles d'entre els models plantejats.
+
+```{r, echo = FALSE}
+lnpr_f <- predict(model4_f, n.ahead = 12)
+pr_f <- exp(lnpr_f$pred) # Prediccions puntuals
+cat("Prediccions per l'any 2019")
+pr_f
+
+ll_f <- exp(lnpr_f$pred - 1.96*lnpr_f$se) # Límit inferior de les bandes del 95% (lower-limit)
+ul_f <- exp(lnpr_f$pred + 1.96*lnpr_f$se) # Upper-limit
+
+ts.plot(serie, ll_f, ul_f, pr_f, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2020), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 4 per l'any 2019")
+text(2019.3, 230, 'Pred4', col = 2)
+text(2018.9, 285, 'Lim. Sup', col = 4)
+text(2019.2, 95, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+sprintf("La mitjana de les amplades dels intervals de predicció pel model 4 és: %f", 
+        mean(ul_f - ll_f))
+```
+
+Podem veure que l'interval de predicció ha disminuit en comparació a la predicció que hem realitzat en l'exercici anterior. Creiem que això és causat pel fet de tenir més informació disponible que ajuda a fer prediccions més precises i tenir un millor model. Podem veure aquesta idea en el fet que l'AIC del model enfinestrat empitjora comparant-lo amb l'AIC del model amb totes les dades.
+
+D'altra banda sembla que la seva forma d'aquesta predicció coincideix més amb les dades observades de l'any anterior.
+
+En concret, el mes de Gener es prediu amb un valor per sota del mes de Gener de l'any $2018$ atès que la darrera observació de la sèrie, Decembre del $2018$, es troba en nivells inferiors respecte altres anys.
+
+Les prediccions s'han fet tenint una sèrie contaminada per valors atípics, així que en el següent apartat es localitzaran i s'eliminaran de la sèrie.
+
+## e) **Tractament d'atípics**
+
+### Detecció automàtica
+
+- **Per l'últim model seleccionat, aplica la detecció automàtica d'atípics. Intenta la interpretació dels atípics detectats.**
+
+Per realitzar la detecció automàtica d'atípics, usarem el fitxer proporcionat que conté algunes funcions. 
+
+```{r, echo = FALSE}
+source("atipics2.R")
+
+model_escollit_atip <- outdetec(model4_f, dif = c(1,12), crit = 2.9, LS = T) 
+
+str(model_escollit_atip) 
+```
+
+
+Un cop feta la detecció automàtica, compararem la variància respecte la que teníem anteriorment. En cas que la seva variància sigui més petita que la del model inicial escollit, la variància residual també disminuïrà, i per tant, el que hauria de passar és que es reduís el nombre de residus que s’allunyen més de tres desviacions estàndard de la mitjana.
+
+```{r, echo = FALSE}
+cat("Atípics", '\n')
+model_escollit_atip$atip
+
+cat("Variància", '\n')
+model_escollit_atip$sigma2
+```
+
+Ordenarem els atípics del model en funció de les observacions que els contenen. D’aquesta manera podrem fer un millor estudi. A més, imputarem els mesos de l'any i les dates corresponents a les observacions atípiques per intentar donar-los alguna explicació.
+
+```{r, echo = FALSE}
+atipics_ordenats <- model_escollit_atip$atip[order(model_escollit_atip $atip[,1]),]
+
+meses = c("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dec")
+
+data.frame(atipics_ordenats,
+           Data = paste(meses[(atipics_ordenats[,1]-1)%%12 + 1],start(lnserie)[1] + 
+                             ((atipics_ordenats[,1]-1)%/%12)),
+           Efecte = exp(atipics_ordenats[,3]) * 100)
+```
+
+La variable W_coeff el que ens permet és determinar si un valor té un valor superior o inferior respecte el que li tocaria. 
+
+Si W_coeff$< 0$ aleshores implicarà una disminució en el nivell de producció de turismes respecte l'esperat. 
+
+L'atípic que es troba en uns nivells més alts respecte el que li tocaria és la observació $104$, amb un efecte del $149.79\%$ sobre la sèrie. Contràriament, el que es troba més per sota és la observació $180$, amb un W_coeff = $-0.33$.
+
+Veiem com la gran majoria d'atípics són de tipus Level Shift, fet que implica que el nivell de la sèrie no es va recuperar després d'aquests. Per aquest motiu, intuïm que la sèrie linealitzada, és a dir, sense la presència dels atípics detectats, serà bastant diferent de la sèrie original. 
+
+Una gran part dels atípics detectats es situen al entre els anys $2008$ i $2009$. Això és a causa de la la forta cris en la qual es va veure submergida el país, fet que va obligar a reduir la producció d'automòbils. D'altra banda, hem trobat articles que parlen sobre outliers específics de la nostra sèrie. En concret, [aquest article](https://www.elespanol.com/invertia/empresas/20180924/produccion-vehiculos-espana-crecio-agosto/340467315_0.html) fa menció de l'additive outlier que trobem a l'Agost de 2018, quan es va experimentar un creixement sobtat durant el mes causat per la tendència a l'alça que s'arrossegava.  
+
+Més enllà dels Level Shift, veiem que la observació $16$ és de tipus Transitory Change (el canvi es corregeix amb el temps) i un parell que són Aditive Outliers (l'atípic només dura un instant de temps).
+
+Traiem els atípics i linealitzem la sèrie per aconseguir tenir-la neta d'atípics: 
+$$
+X_{lin} = X_t - \sum_{k = 0}^K w_k\cdot Ind_{t_0}^{type}(t)
+$$
+
+```{r, echo = FALSE}
+lnserie_lin = lineal(lnserie, atipics_ordenats)
+```
+
+Per tal de veure l’efecte que ha tingut linealitzar la sèrie, és a dir, realitzarem la següent gràfica: 
+
+```{r, echo = FALSE}
+serie_lin = exp(lnserie_lin)
+plot(serie_lin, col = 2)
+lines(serie, col = 1)
+title("Sèrie original i sèrie linealitzada")
+```
+
+Veiem com efectivament la sèrie original (negre) i la linealitzada (vermella) difereixen molt per la alta aparició d'atípics de tipus Level Shift. Aquest fet també es pot comprovar a continuació.
+
+```{r, echo = FALSE}
+plot(lnserie - lnserie_lin)
+title("Efecte dels outliers")
+```
+
+En aquest gràfic veiem de manera més clara la abundància d'outliers de tipus level shift que tenim a la sèrie, conjuntament amb els altres dos tipus d'atípics.
+
+### Previsions de la sèrie linealitzada
+
+- **Un cop linealitzada la sèrie, obteniu les previsions per la sèrie original mitjançant el model per la sèrie linealitzada i compara-les amb les obtingudes anteriorment.**
+
+Per confirmar que no es tracta d'una sèrie estacionària, primerament mirarem la gràfica d'ACF.
+
+```{r, echo = FALSE}
+acf(serie_lin, ylim = c(-1,1), lag.max = 70, main = "")
+title("ACF de la sèrie linealitzada")
+```
+
+S'observa una forta correlació entre la sèrie i el seu passat. L'estructura de correlació depèn de l'instant inicial perquè les barres decreixen lentament. Això significa que caldrà aplicar una o més transformacions per aconseguir mitjana constant, variància constant i estructura de correlació independent de l'inici.
+
+Aplicarem la metodologia Box-Jenkins, tal com hem fet anteriorment.
+
+```{r, echo = FALSE}
+boxplot(serie_lin~floor(time(serie_lin)), xlab = "Anys")
+title("Boxplot de la sèrie linealitzada")
+```
+
+```{r, echo = FALSE}
+mean_lin <- apply(matrix(serie_lin, nrow = 12), 2, mean)
+var_lin <- apply(matrix(serie_lin, nrow = 12), 2, var)
+```
+
+```{r, echo = FALSE}
+plot(var_lin ~ mean_lin, ylim = c(0, 5000), xlab = "Mitjana turismes fabricats", ylab = "Variància") 
+title("Variància segons la mitjana de la sèrie linealitzada")
+```
+
+S'observa un fort efecte megàfon ja que la variància augmenta a mesura que el nombre de turismes fabricats augmenta. Visualment, aquest fet es nota quan el rang interquartílic de les diferents capses del boxplot augmenta per valors alts d'aturats. Apliquem una transformació logarítmica (Box-Cox amb $\lambda = 0$) per corregir la variància.
+
+
+```{r, echo = FALSE}
+boxplot(lnserie_lin~floor(time(lnserie_lin)), xlab = "Anys")
+title("Boxplot de la sèrie linealitzada")
+```
+
+```{r, echo = FALSE}
+lnmean_lin <- apply(matrix(lnserie_lin, nrow = 12), 2, mean)
+lnvar_lin <- apply(matrix(lnserie_lin, nrow = 12), 2, var)
+```
+
+```{r, echo = FALSE}
+plot(lnvar_lin ~ lnmean_lin, ylim = c(0, 0.5), xlab = "Mitjana", ylab = "Variància") 
+title("Variància segons la mitjana de la sèrie linealitzada")
+```
+
+Després de la transformació veiem que la variància de sèrie s'ha corregit i podem considerar-la constant. 
+
+El següent pas és estudiar l'estacionalitat de la sèrie.
+
+```{r, echo = FALSE}
+monthplot(lnserie_lin, xlab = "Mesos de l'any")
+title("Monthplot")
+```
+
+
+```{r, echo = FALSE}
+ts.plot(matrix(lnserie_lin, nrow = 12), xlab = "Mesos", 
+        ylab = "Mitjana de la transformació feta")
+title("ts.plot")
+```
+
+Els indicadors de la mitjana no formen una línia horitzontal, fet que ens fa pensar que tindrem un patró estacional causat per una baixada en la producció durant l'agost.
+
+Per corregir el patró estacional aplicarem una diferenciació estacional de freqüència $12$ al tractar-se de dades mensuals.
+
+```{r, echo = FALSE}
+d12lnserie_lin <- diff(lnserie_lin,12)
+
+# Grafiquem la sèrie transformada
+plot(d12lnserie_lin, xlab = "Anys")
+title("Sèrie diferenciada")
+abline(h = mean(d12lnserie_lin), col = 2, lwd = 2)
+abline(h = 0, col = 4, lwd = 2, lty = 2)
+```
+
+Comprovem la correcció del patró estacional.
+
+```{r, echo = FALSE}
+monthplot(d12lnserie_lin, xlab = "Mesos de l'any")
+title("Monthplot de la sèrie diferenciada")
+```
+
+```{r, echo = FALSE}
+ts.plot(matrix(d12lnserie_lin, nrow = 12), xlab = "Mesos", 
+        ylab = "Mitjana de la transformació feta")
+title("ts.plot")
+```
+
+Es veu com efectivament s'ha corregit l'estacionalitat atès que els indicadors de les mitjanes mensuals es troben alineats. A més veiem com la mitjana és molt propera a ser nul·la, fet que ens servirà més endavant per eliminar el coeficient _intercept_ dels models proposats. A continuació, procedirem a fer el darrer estudi per aconseguir una sèrie estacionària.
+
+Per confirmar si la sèrie necessita diferenciacions regulars per tenir mitjana constant, ens fixarem en un possible augment en la variància al diferenciar. Si aquesta augmenta, no aplicarem la transformació. Del contrari, repetirem el procés fins a trobar l'instant en què la variància augmenti després de fer una diferenciació regular.
+
+```{r, echo = FALSE}
+sprintf("La variància sense aplicar cap diferenciació regular és: %f", var(d12lnserie_lin))
+sprintf("La variància aplicant una diferenciació regular és: %f", var(diff(d12lnserie_lin)))
+sprintf("La variància aplicant dues diferenciacions regular és: %f", var(diff(diff(d12lnserie_lin))))
+```
+
+Cal aplicar una diferenciació regular per corregir la mitjana no constant de la sèrie linealitzada. 
+
+```{r, echo = FALSE}
+d1d12lnserie_lin <- diff(d12lnserie_lin)
+```
+
+Un cop aplicada, hem aconseguit transformar la sèrie linealitzada a estacionària $\Big(W_t = (1-B)(1-B^{12})\cdot \log(X_{lin})\Big)$, obtenint com a resultat:
+
+```{r, echo = FALSE}
+plot(d1d12lnserie_lin, main = "Sèrie linealitzada estacionària", xlab = "Anys")
+abline(v = 1990:2019, col = 4, lty = 3)
+```
+
+Seguidament estudiarem l'ACF i PACF per escollir alguns models.
+
+```{r, echo = FALSE}
+# Lag.max ens permet veure la correlació entre mostres d'un període de 5 anys
+acf(d1d12lnserie_lin, ylim = c(-1,1), lwd = 2, lag.max = 72, col = c(2,rep(1,11)), main = "")
+title("ACF de la sèrie linealitzada estacionària")
+```
+
+```{r, echo = FALSE}
+pacf(d1d12lnserie_lin, ylim = c(-1,1), lwd = 2, lag.max = 72, col = c(rep(1,11),2), main = "")
+title("PACF de la sèrie linealitzada estacionària")
+```
+
+Per la construcció del model, separarem l'estudi de la part estacional i l'estudi de la part regular.
+
+- Part estacional (ens fixem únicament en les barres vermelles dels gràfics):
+
+Considerarem que les mostres corresponents al període estacional del ACF són infinites. Descartarem un model **MA** i proposem un **AR(2)** en la part estacional de la sèrie.
+
+- Part regular (ens fixem únicament en les barres negres dels gràfics):
+
+Per la forma que tenen els gràfics considerem que tant l'ACF com el PACF són infinits a la part regular. Per això proposem un **ARMA(1,1)** en la part regular. 
+
+Juntant les dues parts obtemin un model: $\boxed{\bf{SARIMA(1,0,1)(2,0,0)_{12}}}$.
+
+El que farem és proposar aquest model i anirem incrementant els paràmetres del **ARMA(1,1)** en cas que no millori les propietats del model escollit per predir.
+
+Inicialment el model que tenim és:
+
+```{r, echo = FALSE}
+(model1_1_lin <- arima(x = d1d12lnserie_lin, order = c(1,0,1), seasonal = list(order = c(2,0,0), 
+                                                               period = 12)))
+cat("- Significància dels coeficients: ", 
+    abs(model1_1_lin$coef/sqrt(diag(model1_1_lin$var.coef))) > 2)
+```
+
+Eliminem el coeficient intercept.
+
+```{r, echo = FALSE}
+(model1_2_lin <- arima(x = lnserie_lin, order = c(1,1,1), seasonal = list(order = c(2,1,0), 
+                                                               period = 12)))
+cat("- Significància dels coeficients: ", 
+    abs(model1_2_lin$coef/sqrt(diag(model1_2_lin$var.coef))) > 2)
+```
+
+Eliminem el primer coeficient, perquè no és significatiu i és el que té una $t$-ràtio inferior:
+
+```{r, echo = FALSE}
+(model1_3_lin <- arima(x = lnserie_lin, order = c(1,1,1), seasonal = list(order = c(2,1,0), 
+                                                               period = 12), fixed = c(0, NA, NA, NA)))
+coef1_3_lin <- model1_3_lin$coef[model1_3_lin$coef != 0]
+cat("- Significància dels coeficients: ", 
+    abs(coef1_3_lin/sqrt(diag(model1_3_lin$var.coef))) > 2)
+```
+
+Com l'AIC empitjora, decidim no eliminar aquest coeficient.
+
+```{r, echo = FALSE}
+model1_f_lin <- model1_2_lin
+```
+
+Un cop hem afitat el model, farem la validació del model però sense entrar molt detalladament en l'explicació perquè en la primera part ja s'ha explicat profundament.
+
+```{r, echo = FALSE}
+# Model 1
+resi1_lin <- resid(model1_f_lin)
+plot(resi1_lin, bg = 4, col = "indianred1", xlab = "Anys")
+abline(h = 0)
+abline(h = c(-3*sd(resi1_lin), 3*sd(resi1_lin)), lty = 3, lwd = 2, col = 2)
+abline(h = c(max(resi1_lin), min(resi1_lin)) , lty = 3, col = 4)
+title("Gràfic dels residus - Model 1")
+
+cat("La diferència entre el valor màxim dels residus i l'interval de confiança és: ", 
+    abs(max(resi1_lin)-3*sd(resi1_lin)))
+
+cat("No sobrepassa la banda infeerior de confiança")
+```
+
+```{r, echo = FALSE}
+scatter.smooth(sqrt(abs(resi1_lin)), lpars = list(col = "indianred1"), xlab = "Anys", 
+               main = "Arrel dels valors absoluts dels residus - Model 1")
+grid()
+```
+
+Veiem com no es compleix la hipòtesis de variància constant dels residus perquè, tot i només sortir una observació de les bandes de confiança, l'ajust suau no és una recta horitzontal.
+
+```{r, echo = FALSE}
+# Plot de Normalitat pel model1
+
+qqnorm(resi1_lin, xlab = "Quantils teòrics", ylab = "Quantils mostrals")
+qqline(resi1_lin, col = "indianred1", lwd = 2, lty = 2)
+grid()
+```
+
+```{r, echo = FALSE}
+# Histograma dels residus del model 1
+
+hist(resi1_lin, breaks = 30, freq = FALSE, col = "indianred1", lwd = 2, border = 1, ylim = c(0,5),
+     ylab = "Quantitat", xlab = "Valor del residu", main = "Histograma dels residuals del model 1")
+curve(dnorm(x, mean = mean(resi1_lin), sd = sd(resi1_lin)), col = 2, add = T)
+grid(nx = NA, ny = NULL)
+```
+```{r, echo = FALSE}
+shapiro.test(resi1_lin)
+```
+
+Tot i millorar la normalitat respecte els models plantejats abans de linealitzar, no podem acceptar-la per la presencia d'atípics en les cues, sobretot en la superior, i curtosi positiva en el centre.
+
+```{r, echo = FALSE}
+# Model 1
+s = 12
+acf(resi1_lin, ylim = c(-1,1), lag.max = 60, col = c(2, rep(1, s - 1)), lwd = 2)
+pacf(resi1_lin, ylim = c(-1,1), lag.max = 60, col = c(rep(1, s - 1), 2), lwd = 2)
+```
+
+```{r, echo = FALSE}
+tsdiag(model1_f_lin, gof.lag = 72)
+Box.test(resi1_lin, lag = 72, type = "Ljung")
+```
+Només hi ha independència dels residus en les dues primeres observacions, la resta ja estan correlades.
+
+Atès que no s'ha validat cap de les hipòtesis dels residus, hem anat incrementant l'$ARMA(1,1)$ i hem anat observant que models amb $ARMA(2,1)$, $ARMA(2,2)$, $ARMA(1,3)$ ..., no complien cap de les hipòtesis. Després d'haver plantejat tots els models intermitjos (no els hem inclòs perquè considerem que no és rellevant pel projecte ja que és una part molt repetitiva), hem arribat a un model amb millors propietats: $\boxed{\bf{SARIMA(2,0,3)(2,0,0)_{12}}}$
+
+
+```{r, echo = FALSE}
+(model2_1_lin <- arima(x = d1d12lnserie_lin, order = c(2,0,3), seasonal = list(order = c(2,0,0), 
+                                                               period = 12)))
+cat("- Significància dels coeficients: ", 
+    abs(model2_1_lin$coef/sqrt(diag(model2_1_lin$var.coef))) > 2)
+```
+
+Menyspreem el coeficient _intercept_.
+
+```{r, echo = FALSE}
+(model2_2_lin <- arima(x = lnserie_lin, order = c(2,1,3), seasonal = list(order = c(2,1,0), 
+                                                               period = 12)))
+cat("- Significància dels coeficients: ", 
+    abs(model2_2_lin$coef/sqrt(diag(model2_2_lin$var.coef))) > 2)
+```
+
+```{r, echo = FALSE}
+model2_f_lin <- model2_2_lin
+```
+
+Com que tots els coeficients són significatius, prodecim a fer la validació dels residus.
+
+```{r, echo = FALSE}
+# Model 2
+resi2_lin <- resid(model2_f_lin)
+plot(resi2_lin, bg = 4, col = "burlywood3", xlab = "Anys")
+abline(h = 0)
+abline(h = c(-3*sd(resi2_lin), 3*sd(resi2_lin)), lty = 3, lwd = 2, col = 2)
+abline(h = c(max(resi2_lin), min(resi2_lin)) , lty = 3, col = 4)
+title("Gràfic dels residus - Model 2")
+
+cat('\n', "La diferència entre el valor màxim dels residus i l'interval de confiança és: ", 
+    abs(max(resi2_lin)-3*sd(resi2_lin)))
+
+cat('\n', "La diferència entre el valor mínim dels residus i l'interval de confiança és: ", 
+    abs(-3*sd(resi2_lin) - min(resi2_lin)))
+```
+
+```{r, echo = FALSE}
+scatter.smooth(sqrt(abs(resi2_lin)), lpars = list(col = "burlywood3"), xlab = "Anys", 
+               main = "Arrel dels valors absoluts dels residus - Model 2")
+grid()
+```
+
+Aquest model presenta una variància representada per una líniea quasi recta, i amb influència de diversos valors acumulats amb residus baixos cap l'any $1995$. Atès que només se surt una observació de la regió de confiança i que ha passat molt temps des de l'acumulació de residus, creiem que seria possible acceptar variància constant en els residus. Després l'any $2001$ aproximadament, la sèrie acaba la mateixa variància per totes les observacions. Cal destacar, però, que es trobem en un cas en què ambdues postures d'acceptació i rebuig de la hipòtesi estarien acceptades.
+
+Estudiem la normalitat.
+
+```{r, echo = FALSE}
+# Plot de Normalitat pel model 2
+
+qqnorm(resi2_lin, xlab = "Quantils teòrics", ylab = "Quantils mostrals")
+qqline(resi2_lin, col = "burlywood3", lwd = 2, lty = 2)
+grid()
+```
+
+```{r, echo = FALSE}
+# Histograma dels residus del model 2
+
+hist(resi2_lin, breaks = 30, freq = FALSE, col = "burlywood3", lwd = 2, border = 1, ylim = c(0,5),
+     ylab = "Quantitat", xlab = "Valor del residu", main = "Histograma dels residuals del model 2")
+curve(dnorm(x, mean = mean(resi2_lin), sd = sd(resi2_lin)), col = 2, add = T)
+grid(nx = NA, ny = NULL)
+```
+```{r, echo = FALSE}
+shapiro.test(resi2_lin)
+```
+
+És evident que aquest model no té normalitat en els residus. S'aprecia per la forma de l'histograma i perquè el test de Shapiro-Wilk prèn un valor inferior a $0.05$. Tenim un $p$-valor del test inferior al del primer model proposat per la sèrie linealitzada.
+
+Estudiem la independència.
+
+```{r, echo = FALSE}
+# Model 2
+s = 12
+acf(resi2_lin, ylim = c(-1,1), lag.max = 60, col = c(2, rep(1, s - 1)), lwd = 2)
+pacf(resi2_lin, ylim = c(-1,1), lag.max = 60, col = c(rep(1, s - 1), 2), lwd = 2)
+```
+
+```{r, echo = FALSE}
+tsdiag(model2_f_lin, gof.lag = 72)
+Box.test(resi2_lin, lag = 72, type = "Ljung")
+```
+
+Al fixar-nos en el PACF i ACF ja sospitem que el model tindrà independència en els residus, fet que es verifica amb el test de Ljung-Box perquè no es veu correlació entre residus. 
+
+Amb la sèrie linealitzada hem obtingut per tant un model amb variància constant i independència dels residus, millorant molt la situació de la qual partíem abans de treure els atípics.
+
+Seguidament fem les prediccions pel segon model.
+
+```{r, echo = FALSE}
+lnpr2_lin <- predict(model2_f_lin, n.ahead = 12)
+pr2_lin <- exp(lnpr2_lin$pred) # Prediccions puntuals
+
+ll2_lin <- exp(lnpr2_lin$pred - 1.96*lnpr2_lin$se) # Límit inferior de les bandes de confiança amb un 95% 
+ul2_lin <- exp(lnpr2_lin$pred + 1.96*lnpr2_lin$se) # Límit superior
+
+ts.plot(serie, ll2_lin, ul2_lin, pr2_lin, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2020), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 2 de la sèrie linealitzada \n sense corregir LS")
+text(2019.3, 290, 'Pred4', col = 2)
+text(2018.7, 310, 'Lim. Sup', col = 4)
+text(2019.25, 125, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+```
+
+Aquestes prediccions que hem obtingut no acaben de ser del tot correctes perquè no hem corregit l'impacte dels atípics LS, Per solventar-ho, el que farem és calcular els pesos de tots els LS i després sumar aquest pes a la predicció obtinguda. El resultat d'aplicar això és:
+
+```{r, echo = FALSE}
+pesLS = sum(atipics_ordenats[atipics_ordenats$type_detected == "LS", 3])
+lnpr2_lin <- predict(model2_f_lin, n.ahead = 12)
+
+pr2_lin <- exp(lnpr2_lin$pred + pesLS) # Prediccions puntuals
+
+ll2_lin <- exp(lnpr2_lin$pred + pesLS - 1.96*lnpr2_lin$se) # Límit inferior de les bandes de confiança amb un 95% 
+ul2_lin <- exp(lnpr2_lin$pred + pesLS + 1.96*lnpr2_lin$se) # Límit superior
+
+ts.plot(serie, ll2_lin, ul2_lin, pr2_lin, lty = c(1,2,2,1), col = c(1,4,4,2), 
+        xlim = c(2015, 2020), type = "o", xlab = "Anys", ylab = "Milers de turismes fabricats")
+text(2016.7, 250, 'Turismos')
+title("Prediccions pel Model 2 de la sèrie linealitzada \n amb LS corregit")
+text(2019.3, 220, 'Pred4', col = 2)
+text(2018.9, 300, 'Lim. Sup', col = 4)
+text(2019.2, 95, 'Lim. Inf', col = 4)
+abline(v = 2015:2019, lty = 3, col = 1)
+```
+
+A simple vista sembla ser que la precisió de les prediccions no és molt alta. La sèrie presentava una gran quantitat d'atípics amb canvis de nivell molt sobtats, dificultant molt el tractament i la capacitat de predicció pels models proposats. 
+
+Veiem que el model usat per fer les prediccions sobre la sèrie linealitzada té un AIC pitjor que el proposat per la sèrie no linealitzada. 
+
+Per aconseguir millorar les validacions dels residus hem hagut d'afitar un model molt més complex. Fent això, hem pogut obtenir prediccions d'una sèrie complicada per la seva estructura i gran quantitat d'atípics. 
+
+Observem que l'interval de la regió de confiança ha augmentat una mica però que tot i així la predicció feta per l'any $2019$ s'ajusta bastant a les observacions dels anys anteriors. Les prediccions fetes són més fiables perquè no consideren successos extranys que van fer modificar el comportament de la sèrie. En definitiva, hem aconseguit plantejar un model amb millors propietats dels residus i una sèrie linealitzada no contaminada pels atípics amb unes prediccions prou raonables en relació a les dades.
